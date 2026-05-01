@@ -4,6 +4,8 @@
 // @version      2.11
 // @description  Стрелка-переход между профилем игрока в Betking и Altenar
 // @author       Eduard Petrushenko
+// @updateURL    https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking%20%E2%86%94%20Altenar%20Crosslink.user.js
+// @downloadURL  https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking%20%E2%86%94%20Altenar%20Crosslink.user.js
 // @match        https://sb2admin-altenar2.biahosted.com/*
 // @match        https://admin.betking.com.ua/*
 // @match        https://admin.777.ua/*
