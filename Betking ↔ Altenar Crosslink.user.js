@@ -8,21 +8,6 @@
 // @downloadURL  https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking%20%E2%86%94%20Altenar%20Crosslink.user.js
 // @match        https://sb2admin-altenar2.biahosted.com/*
 // @match        https://admin.betking.com.ua/*
-// @match        https://admin.777.ua/*
-// @match        https://admin.vegas.ua/*
-// @match        https://admin.wildwinz.com/*
-// @match        https://admin.funrize.com/*
-// @match        https://admin.nolimitcoins.com/*
-// @match        https://admin.taofortune.com/*
-// @match        https://admin.funzcity.com/*
-// @match        https://admin.fortunewheelz.com/*
-// @match        https://admin.jackpotrabbit.com/*
-// @match        https://admin.sweepshark.com/*
-// @match        https://admin.scarletsands.com/*
-// @match        https://admin.stormrush.com/*
-// @match        https://admin.mrgoodwin.com/*
-// @match        https://admin.playtana.com/*
-// @match        https://admin.vegasway.com/*
 // @grant        none
 // ==/UserScript==
 
