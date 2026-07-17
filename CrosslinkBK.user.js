@@ -522,7 +522,8 @@
         tpl.innerHTML = html;
         (function walk(node) {
             [...node.childNodes].forEach(child => {
-                if (child.nodeType !== 1) return;
+                if (child.nodeType === 8) { child.remove(); return; }   // коментарі-маркери (StartFragment тощо)
+                if (child.nodeType !== 1) return;                        // текстові вузли не чіпаємо
                 walk(child);
                 const tag = child.tagName;
                 if (!ALLOWED[tag]) { child.replaceWith(...child.childNodes); return; }
@@ -533,7 +534,14 @@
                 if (styleColor) child.style.color = styleColor;
             });
         })(tpl.content);
-        return tpl.innerHTML;
+
+        // Прибираємо службові переноси з буфера (через white-space: pre-wrap вони давали зайві абзаци).
+        // nbsp (\u00A0) у розрядах GGR НЕ чіпаємо.
+        let out = tpl.innerHTML;
+        out = out.replace(/<!--[\s\S]*?-->/g, '');            // будь-які залишки коментарів
+        out = out.replace(/[\t\r\n]+/g, ' ');                 // переноси/таби -> пробіл
+        out = out.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');    // трим по краях
+        return out;
     }
 
     function installCommentColorPaste() {
