@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Betking ↔ Altenar Crosslink
 // @namespace    http://tampermonkey.net/
-// @version      2.12
-// @description  Стрелка-переход между профилем игрока в Betking и Altenar, копирование GGR с цветом.
+// @version      2.13
+// @description  Стрелка-переход между профилем игрока в Betking и Altenar, копирование GGR с цветом + збереження кольору при вставці в поле коментаря на Betking.
 // @author       Eduard Petrushenko
 // @updateURL    https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking%20%E2%86%94%20Altenar%20Crosslink.user.js
 // @downloadURL  https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking%20%E2%86%94%20Altenar%20Crosslink.user.js
@@ -39,7 +39,6 @@
     // ─────────────────────────────────────────────
 
     const host = window.location.hostname;
-    const url  = window.location.href;
     const isAltenar = host.includes('altenar');
     const isBetking = !isAltenar;
     const BONUS_BOUNDARY_COLOR = '#dc3545';
@@ -147,6 +146,49 @@
         else cell.appendChild(arrow);
     }
 
+    // ─────────────────────────────────────────────
+    // BETKING → ALTENAR (ОБНОВЛЕННЫЙ ТЕХНОЛОГИЧНЫЙ МЕТОД)
+    // ─────────────────────────────────────────────
+    function attachArrowBetking() {
+        const currentUrl = window.location.href;
+        if (!currentUrl.includes('playersItems/update') && !currentUrl.includes('playersItems/view')) return;
+
+        // Поиск по тегам <th> гарантирует стабильность при любых динамических изменениях в строке
+        const headers = document.querySelectorAll('th');
+        for (const th of headers) {
+            const text = th.textContent.toLowerCase().trim();
+            if (
+                text === 'номер игрока' ||
+                text === 'player number' ||
+                text === 'номер гравця' ||
+                text === 'player id'
+            ) {
+                const td = th.nextElementSibling;
+                if (!td) continue;
+
+                // Если стрелочка на месте именно в этой ячейке — пропускаем
+                if (td.querySelector('.xlink-arrow')) continue;
+
+                // Находим ID (первое число в ячейке)
+                const match = td.textContent.match(/\d+/);
+                if (!match) continue;
+                const playerNumber = match[0];
+
+                const altenarUrl = `https://sb2admin-altenar2.biahosted.com/v2/players?site=1#extId=${playerNumber}`;
+                const arrow = createArrow(`Открыть ${playerNumber} в Altenar`, altenarUrl);
+                arrow.id = 'xlink-betking-arrow';
+
+                // Вставляем сразу за числовым ID (первым span)
+                const span = td.querySelector('span');
+                if (span) {
+                    span.insertAdjacentElement('afterend', arrow);
+                } else {
+                    td.appendChild(arrow);
+                }
+            }
+        }
+    }
+
     function attachArrowAltenarProfile() {
         if (!window.location.pathname.includes('/ManagePlayersProfile')) return;
         if (document.getElementById('xlink-altenar-profile-arrow')) return;
@@ -169,45 +211,10 @@
     }
 
     // ─────────────────────────────────────────────
-    // BETKING → ALTENAR
-    // ─────────────────────────────────────────────
-    function getBetkingPlayerNumber() {
-        for (const row of document.querySelectorAll('tr')) {
-            const text = row.textContent.toLowerCase();
-            if (text.includes('номер игрока') || text.includes('player number') || text.includes('номер гравця')) {
-                const span = row.querySelector('td span');
-                if (span) return span.textContent.trim();
-            }
-        }
-        return null;
-    }
-
-    function attachArrowBetking() {
-        if (!url.includes('playersItems/update')) return;
-        if (document.getElementById('xlink-betking-arrow')) return;
-
-        const playerNumber = getBetkingPlayerNumber();
-        if (!playerNumber) return;
-
-        for (const row of document.querySelectorAll('tr')) {
-            const text = row.textContent.toLowerCase();
-            if (text.includes('номер игрока') || text.includes('player number') || text.includes('номер гравця')) {
-                const span = row.querySelector('td span');
-                if (!span) continue;
-                const altenarUrl = `https://sb2admin-altenar2.biahosted.com/v2/players?site=1#extId=${playerNumber}`;
-                const arrow = createArrow(`Открыть ${playerNumber} в Altenar`, altenarUrl);
-                arrow.id = 'xlink-betking-arrow';
-                span.insertAdjacentElement('afterend', arrow);
-                break;
-            }
-        }
-    }
-
-    // ─────────────────────────────────────────────
     // AUTOFILL
     // ─────────────────────────────────────────────
     function autoFillBetkingSearch() {
-        if (!url.includes('playersItems/search')) return;
+        if (!window.location.href.includes('playersItems/search')) return;
         const number = new URLSearchParams(window.location.search).get('number');
         if (!number) return;
 
@@ -314,7 +321,7 @@
     }
 
     // ─────────────────────────────────────────────
-    // GGR COPY
+    // GGR COPY (СТАБИЛЬНЫЙ МЕТОД С ЦВЕТОМ)
     // ─────────────────────────────────────────────
     const PERIOD_MAP = {
         'All-Time': 'весь час',
@@ -382,45 +389,62 @@
                     }
                 });
 
-                // ИСПОЛЬЗУЕМ <span> для корректной вставки в contenteditable
+                // Форматируем HTML с тегами <font> для текстового редактора
                 const ggrColor = rounded >= 0 ? '#008000' : '#ff0000';
-                const ggrColored = `<span style="color: ${ggrColor}">${ggrFormatted} грн</span>`;
+                const ggrColored = `<font color="${ggrColor}">${ggrFormatted}</font> грн`;
 
                 let marginColored = marginText ? (() => {
                     const mColor = marginText.startsWith('-') ? '#ff0000' : '#008000';
-                    return `<span style="color: ${mColor}">${marginText}%</span>`;
+                    return `<font color="${mColor}">${marginText}%</font>`;
                 })() : '';
 
                 // HTML и PlainText версии
                 const resultHtml = `За ${activePeriod} ${verb} ${ggrColored} (${marginColored})`;
                 const resultPlain = `За ${activePeriod} ${verb} ${ggrFormatted} грн (${marginText}%)`;
 
-                // Запись в буфер обмена с поддержкой HTML (Rich Text)
-                if (window.ClipboardItem) {
+                // Функция для записи сырого HTML в обход нормализации браузера
+                function copyRawData(html, plain) {
+                    const tempEl = document.createElement('span');
+                    tempEl.textContent = 'dummy';
+                    tempEl.style.position = 'fixed';
+                    tempEl.style.opacity = '0';
+                    document.body.appendChild(tempEl);
+
+                    const range = document.createRange();
+                    range.selectNodeContents(tempEl);
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+
+                    const copyHandler = function(e) {
+                        e.preventDefault();
+                        e.clipboardData.setData('text/html', html);
+                        e.clipboardData.setData('text/plain', plain);
+                    };
+
+                    document.addEventListener('copy', copyHandler);
+
+                    let success = false;
                     try {
-                        const htmlBlob = new Blob([resultHtml], { type: 'text/html' });
-                        const textBlob = new Blob([resultPlain], { type: 'text/plain' });
-                        const item = new ClipboardItem({
-                            'text/html': htmlBlob,
-                            'text/plain': textBlob
-                        });
-                        navigator.clipboard.write([item]).then(() => {
-                            showToast('✓ ' + resultPlain);
-                        }).catch(() => {
-                            fallbackCopy(resultPlain);
-                        });
-                    } catch (e) {
-                        fallbackCopy(resultPlain);
+                        success = document.execCommand('copy');
+                    } catch (err) {
+                        console.error('execCommand error:', err);
                     }
-                } else {
-                    fallbackCopy(resultPlain);
+
+                    document.removeEventListener('copy', copyHandler);
+                    selection.removeAllRanges();
+                    document.body.removeChild(tempEl);
+
+                    if (success) {
+                        showToast('✓ ' + plain);
+                    } else {
+                        navigator.clipboard.writeText(plain)
+                            .then(() => showToast('✓ (без кольору) ' + plain))
+                            .catch(() => showToast('Помилка копіювання'));
+                    }
                 }
 
-                function fallbackCopy(text) {
-                    navigator.clipboard.writeText(text).then(() => {
-                        showToast('✓ ' + text);
-                    }).catch(() => showToast('Помилка копіювання'));
-                }
+                copyRawData(resultHtml, resultPlain);
             });
         });
     }
@@ -488,6 +512,59 @@
         return `${verb} ${formatted} грн`;
     }
 
+    // ─────────────────────────────────────────────
+    // ВСТАВКА З ЗБЕРЕЖЕННЯМ КОЛЬОРУ В ПОЛЕ КОМЕНТАРЯ (Betking)
+    // Перехоплюємо paste ДО нативного обробника Betking, який ріже колір.
+    // ─────────────────────────────────────────────
+    function sanitizeCommentHtml(html) {
+        const ALLOWED = { FONT: true, SPAN: true, B: true, STRONG: true, I: true, EM: true, U: true, BR: true };
+        const tpl = document.createElement('template');
+        tpl.innerHTML = html;
+        (function walk(node) {
+            [...node.childNodes].forEach(child => {
+                if (child.nodeType !== 1) return;
+                walk(child);
+                const tag = child.tagName;
+                if (!ALLOWED[tag]) { child.replaceWith(...child.childNodes); return; }
+                const fontColor  = (tag === 'FONT') ? child.getAttribute('color') : null;
+                const styleColor = child.style ? child.style.color : '';
+                [...child.attributes].forEach(a => child.removeAttribute(a.name));
+                if (fontColor)  child.setAttribute('color', fontColor);
+                if (styleColor) child.style.color = styleColor;
+            });
+        })(tpl.content);
+        return tpl.innerHTML;
+    }
+
+    function installCommentColorPaste() {
+        if (window.__xlinkColorPasteInstalled) return;
+        window.__xlinkColorPasteInstalled = true;
+
+        document.addEventListener('paste', function (e) {
+            const t = e.target;
+            const field = t && t.closest && t.closest(
+                '.antifraud-comment-editor, div[contenteditable="true"][id^="antifraud-input-"], [data-comment-edit]'
+            );
+            if (!field) return;
+
+            const cd = e.clipboardData || window.clipboardData;
+            if (!cd) return;
+
+            const html  = cd.getData('text/html');
+            const plain = cd.getData('text/plain') || cd.getData('text');
+
+            e.preventDefault();
+            e.stopImmediatePropagation();
+
+            field.focus();
+            if (html) {
+                document.execCommand('insertHTML', false, sanitizeCommentHtml(html));
+            } else {
+                document.execCommand('insertText', false, plain);
+            }
+        }, true); // capture — спрацьовує раніше нативного $(document).on('paste', ...)
+    }
+
     function init() {
         if (isAltenar) {
             autoFillAltenarSearch();
@@ -506,15 +583,20 @@
             }).observe(document.body, { childList: true, subtree: true });
         }
         if (isBetking) {
+            installCommentColorPaste();
             autoFillBetkingSearch();
             attachArrowBetking();
-            new MutationObserver(() => attachArrowBetking()).observe(document.body, { childList: true, subtree: true });
 
-            if (url.includes('sportBetting/report')) {
-                highlightBonusBoundaries();
-                new MutationObserver(() => {
+            // Наблюдатель на Betking теперь динамически проверяет новые URL
+            new MutationObserver(() => {
+                attachArrowBetking();
+                if (window.location.href.includes('sportBetting/report')) {
                     highlightBonusBoundaries();
-                }).observe(document.body, { childList: true, subtree: true });
+                }
+            }).observe(document.body, { childList: true, subtree: true });
+
+            if (window.location.href.includes('sportBetting/report')) {
+                highlightBonusBoundaries();
             }
         }
     }
