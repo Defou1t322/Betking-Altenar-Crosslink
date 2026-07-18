@@ -4,8 +4,8 @@
 // @version      2.13
 // @description  Стрелка-переход между профилем игрока в Betking и Altenar, копирование GGR с цветом + збереження кольору при вставці в поле коментаря на Betking.
 // @author       Eduard Petrushenko
-// @updateURL    https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking%20%E2%86%94%20Altenar%20Crosslink.user.js
-// @downloadURL  https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking%20%E2%86%94%20Altenar%20Crosslink.user.js
+// @updateURL    https://github.com/Defou1t322/Betking-Altenar-Crosslink/raw/refs/heads/main/CrosslinkBK.user.js
+// @downloadURL  https://github.com/Defou1t322/Betking-Altenar-Crosslink/raw/refs/heads/main/CrosslinkBK.user.js
 // @match        https://sb2admin-altenar2.biahosted.com/*
 // @match        https://admin.betking.com.ua/*
 // @match        https://admin.777.ua/*
