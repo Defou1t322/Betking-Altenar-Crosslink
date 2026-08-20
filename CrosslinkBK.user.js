@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Betking ↔ Altenar Crosslink
 // @namespace    http://tampermonkey.net/
-// @version      2.15
+// @version      2.16
 // @description  Стрелка-переход между профилем игрока в Betking и Altenar, копирование GGR с цветом + збереження кольору при вставці в поле коментаря на Betking.
 // @author       Eduard Petrushenko
 // @updateURL    https://github.com/Defou1t322/Betking-Altenar-Crosslink/raw/refs/heads/main/CrosslinkBK.user.js
@@ -517,7 +517,11 @@
     }
 
     function attachSportTableCopy() {
-        document.querySelectorAll('tr[data-testid="mtablebodyrow"], table tbody tr').forEach(row => {
+        // Только профиль игрока: на BetList и прочих страницах те же mtablebodyrow,
+        // и без этой проверки клик по любой строке молча забирал буфер обмена.
+        if (!window.location.pathname.includes('/ManagePlayersProfile')) return;
+
+        document.querySelectorAll('tr[data-testid="mtablebodyrow"]').forEach(row => {
             if (row.dataset.sportCopyDone) return;
             const cells = row.querySelectorAll('td');
             if (cells.length < 7) return;
