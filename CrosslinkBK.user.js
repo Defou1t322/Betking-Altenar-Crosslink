@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Betking ↔ Altenar Crosslink
 // @namespace    http://tampermonkey.net/
-// @version      2.13
+// @version      2.15
 // @description  Стрелка-переход между профилем игрока в Betking и Altenar, копирование GGR с цветом + збереження кольору при вставці в поле коментаря на Betking.
 // @author       Eduard Petrushenko
 // @updateURL    https://github.com/Defou1t322/Betking-Altenar-Crosslink/raw/refs/heads/main/CrosslinkBK.user.js
@@ -193,7 +193,7 @@
         if (!window.location.pathname.includes('/ManagePlayersProfile')) return;
         if (document.getElementById('xlink-altenar-profile-arrow')) return;
 
-        const playerIdsEl = document.querySelector('[class*="Headerstyles__PlayerIds"]');
+        const playerIdsEl = document.querySelector('[class*="PlayerIds"]');
         if (!playerIdsEl) return;
 
         const text = playerIdsEl.textContent;
@@ -201,7 +201,7 @@
         if (!match) return;
         const extId = match[1];
 
-        const nameContainer = document.querySelector('[class*="Headerstyles__PlayerNameContainer"]');
+        const nameContainer = document.querySelector('[class*="PlayerNameContainer"]');
         if (!nameContainer) return;
 
         const betkingUrl = `https://admin.betking.com.ua/players/playersItems/search/?number=${extId}`;
@@ -237,7 +237,7 @@
     }
 
     function getFindBtn() {
-        return document.querySelector('[class*="FindButtonstyles__StyledButton"]') ||
+        return document.querySelector('[class*="FindButton"]') ||
                document.querySelector('button svg[data-testid="SearchIcon"]')?.closest('button');
     }
 
@@ -343,34 +343,148 @@
         setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 2000);
     }
 
+    // Единая точка копирования: сначала execCommand (сохраняет цвет и не требует
+    // разрешений clipboard), при неудаче — async Clipboard API, и в любом случае тост.
+    function copyRich(html, plain) {
+        const tempEl = document.createElement('span');
+        tempEl.textContent = 'dummy';
+        tempEl.style.position = 'fixed';
+        tempEl.style.opacity = '0';
+        document.body.appendChild(tempEl);
+
+        const range = document.createRange();
+        range.selectNodeContents(tempEl);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        const copyHandler = function (e) {
+            e.preventDefault();
+            if (html) e.clipboardData.setData('text/html', html);
+            e.clipboardData.setData('text/plain', plain);
+        };
+
+        document.addEventListener('copy', copyHandler);
+
+        let success = false;
+        try {
+            success = document.execCommand('copy');
+        } catch (err) {
+            console.error('[xlink] execCommand error:', err);
+        }
+
+        document.removeEventListener('copy', copyHandler);
+        selection.removeAllRanges();
+        tempEl.remove();
+
+        if (success) {
+            showToast('✓ ' + plain);
+            return;
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(plain)
+                .then(() => showToast((html ? '✓ (без кольору) ' : '✓ ') + plain))
+                .catch(err => {
+                    console.error('[xlink] clipboard error:', err);
+                    showToast('Помилка копіювання (див. консоль)');
+                });
+        } else {
+            showToast('Помилка копіювання: буфер недоступний');
+        }
+    }
+
+    // Блоки агрегированных данных на профиле. Основной путь — styled-components
+    // классы Altenar; если их имена изменились после ребилда фронта, ищем по тексту
+    // заголовка, иначе скрипт молча перестаёт работать.
+    const AGGREGATE_TITLES = ['GGR', 'Margin', 'Turnover', 'Bets', 'Bets count'];
+
+    // styled-components v6 перевернул генерацию имён: было AggregatedDatastyles__WrapperAggregate,
+    // стало WrapperAggregate-sc-<hash>. Совпадение по общей части покрывает оба варианта.
+    function findAggregateBlocks() {
+        const byClass = [...document.querySelectorAll('[class*="WrapperAggregate"]')]
+            .map(w => ({
+                title: w.querySelector('[class*="Title"]'),
+                value: w.querySelector('[class*="Value"]'),
+            }))
+            .filter(b => b.title && b.value);
+        if (byClass.length) return byClass;
+
+        const out = [];
+        document.querySelectorAll('div, span, p, h1, h2, h3, h4, h5, h6').forEach(el => {
+            if (el.children.length) return;
+            if (!AGGREGATE_TITLES.includes(el.textContent.trim())) return;
+            const parent = el.parentElement;
+            if (!parent) return;
+            const value = [...parent.children].find(c => c !== el && c.textContent.trim());
+            if (value) out.push({ title: el, value });
+        });
+        return out;
+    }
+
+    // На странице две независимые группы периодов (Player Overview и Player Statistics)
+    // со своими активными кнопками, поэтому ищем ближайшую к нужному блоку, поднимаясь
+    // по предкам, а не первую попавшуюся в документе.
+    function findPeriodButtonsNear(el) {
+        for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+            const btns = [...node.querySelectorAll('[class*="PeriodsButton"]')];
+            if (btns.length) return btns;
+        }
+        return [...document.querySelectorAll('[class*="PeriodsButton"]')];
+    }
+
+    function getActivePeriodFor(el) {
+        const btns = findPeriodButtonsNear(el);
+        if (!btns.length) return 'весь час';
+
+        const active =
+            btns.find(b => b.getAttribute('aria-pressed') === 'true' || b.getAttribute('aria-selected') === 'true') ||
+            findByUniqueClass(btns) ||
+            btns.find(b => {
+                const bg = window.getComputedStyle(b).backgroundColor;
+                return bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent';
+            }) ||
+            btns[0];
+
+        const label = active.textContent.trim();
+        return PERIOD_MAP[label] || label;
+    }
+
+    // Активная кнопка не помечена ни aria-атрибутом, ни говорящим классом — у неё просто
+    // свой сгенерированный styled-components класс, которого нет у остальных. Классы Mui*
+    // отбрасываем: firstButton/lastButton тоже уникальны, но активность не означают.
+    function findByUniqueClass(btns) {
+        if (btns.length < 3) return null;
+        const counts = new Map();
+        btns.forEach(b => {
+            new Set([...b.classList].filter(c => !c.startsWith('Mui')))
+                .forEach(c => counts.set(c, (counts.get(c) || 0) + 1));
+        });
+        const unique = btns.filter(b =>
+            [...b.classList].some(c => !c.startsWith('Mui') && counts.get(c) === 1)
+        );
+        return unique.length === 1 ? unique[0] : null;
+    }
+
     function attachGgrCopy() {
         if (!window.location.pathname.includes('/ManagePlayersProfile')) return;
 
-        document.querySelectorAll('[class*="AggregatedDatastyles__WrapperAggregate"]').forEach(wrapper => {
-            if (wrapper.dataset.ggrDone) return;
-            const titleEl = wrapper.querySelector('[class*="AggregatedDatastyles__Title"]');
-            const valueEl = wrapper.querySelector('[class*="AggregatedDatastyles__Value"]');
-            if (!titleEl || !valueEl) return;
+        findAggregateBlocks().forEach(({ title: titleEl, value: valueEl }) => {
             if (titleEl.textContent.trim() !== 'GGR') return;
+            // Метку ставим на сам valueEl: React пересоздаёт этот узел при смене
+            // периода, и новый экземпляр должен получить свой слушатель.
+            if (valueEl.dataset.ggrDone) return;
 
-            wrapper.dataset.ggrDone = '1';
+            valueEl.dataset.ggrDone = '1';
             valueEl.classList.add('xlink-ggr-copy');
             valueEl.title = 'Копіювати GGR';
 
             valueEl.addEventListener('click', () => {
-                let activePeriod = 'весь час';
-                const periodBtns = [...document.querySelectorAll('[class*="PeriodsButtonsstyles__PeriodsButton"]')];
-                if (periodBtns.length) {
-                    const active = periodBtns.find(btn => {
-                        const bg = window.getComputedStyle(btn).backgroundColor;
-                        return bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent';
-                    }) || periodBtns[0];
-                    activePeriod = PERIOD_MAP[active.textContent.trim()] || active.textContent.trim();
-                }
+                const activePeriod = getActivePeriodFor(valueEl);
 
                 const ggrRaw = valueEl.textContent.trim();
-                const ggrMatch = ggrRaw.match(/([+-]?\d[\d.,]*)\s*UAH/);
-                if (!ggrMatch) return;
+                const ggrMatch = ggrRaw.match(/([+-]?\d[\d.,]*)\s*UAH/) || ggrRaw.match(/([+-]?\d[\d.,]*)/);
+                if (!ggrMatch) { showToast('Не вдалося прочитати GGR: ' + ggrRaw); return; }
                 const ggrNum = ggrMatch[1].trim();
                 const isPositive = !ggrNum.startsWith('-');
                 const verb = isPositive ? 'програє' : 'виграє';
@@ -379,78 +493,31 @@
                 const ggrFormatted = (rounded >= 0 ? '+' : '-') + absFormatted;
 
                 let marginText = '';
-                document.querySelectorAll('[class*="AggregatedDatastyles__WrapperAggregate"]').forEach(w => {
-                    const t = w.querySelector('[class*="AggregatedDatastyles__Title"]');
-                    const v = w.querySelector('[class*="AggregatedDatastyles__Value"]');
-                    if (t && v && t.textContent.trim() === 'Margin') {
-                        let m = v.textContent.trim().replace('%', '').replace('.', ',');
-                        if (!m.startsWith('-') && !m.startsWith('+')) m = '+' + m;
-                        marginText = m;
-                    }
+                findAggregateBlocks().forEach(b => {
+                    if (b.title.textContent.trim() !== 'Margin') return;
+                    let m = b.value.textContent.trim().replace('%', '').replace('.', ',');
+                    if (!m.startsWith('-') && !m.startsWith('+')) m = '+' + m;
+                    marginText = m;
                 });
 
                 // Форматируем HTML с тегами <font> для текстового редактора
                 const ggrColor = rounded >= 0 ? '#008000' : '#ff0000';
                 const ggrColored = `<font color="${ggrColor}">${ggrFormatted}</font> грн`;
 
-                let marginColored = marginText ? (() => {
-                    const mColor = marginText.startsWith('-') ? '#ff0000' : '#008000';
-                    return `<font color="${mColor}">${marginText}%</font>`;
-                })() : '';
+                const marginColored = marginText
+                    ? `<font color="${marginText.startsWith('-') ? '#ff0000' : '#008000'}">${marginText}%</font>`
+                    : '';
 
-                // HTML и PlainText версии
-                const resultHtml = `За ${activePeriod} ${verb} ${ggrColored} (${marginColored})`;
-                const resultPlain = `За ${activePeriod} ${verb} ${ggrFormatted} грн (${marginText}%)`;
-
-                // Функция для записи сырого HTML в обход нормализации браузера
-                function copyRawData(html, plain) {
-                    const tempEl = document.createElement('span');
-                    tempEl.textContent = 'dummy';
-                    tempEl.style.position = 'fixed';
-                    tempEl.style.opacity = '0';
-                    document.body.appendChild(tempEl);
-
-                    const range = document.createRange();
-                    range.selectNodeContents(tempEl);
-                    const selection = window.getSelection();
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-
-                    const copyHandler = function(e) {
-                        e.preventDefault();
-                        e.clipboardData.setData('text/html', html);
-                        e.clipboardData.setData('text/plain', plain);
-                    };
-
-                    document.addEventListener('copy', copyHandler);
-
-                    let success = false;
-                    try {
-                        success = document.execCommand('copy');
-                    } catch (err) {
-                        console.error('execCommand error:', err);
-                    }
-
-                    document.removeEventListener('copy', copyHandler);
-                    selection.removeAllRanges();
-                    document.body.removeChild(tempEl);
-
-                    if (success) {
-                        showToast('✓ ' + plain);
-                    } else {
-                        navigator.clipboard.writeText(plain)
-                            .then(() => showToast('✓ (без кольору) ' + plain))
-                            .catch(() => showToast('Помилка копіювання'));
-                    }
-                }
-
-                copyRawData(resultHtml, resultPlain);
+                copyRich(
+                    `За ${activePeriod} ${verb} ${ggrColored} (${marginColored})`,
+                    `За ${activePeriod} ${verb} ${ggrFormatted} грн (${marginText}%)`
+                );
             });
         });
     }
 
     function attachSportTableCopy() {
-        document.querySelectorAll('tr[data-testid="mtablebodyrow"]').forEach(row => {
+        document.querySelectorAll('tr[data-testid="mtablebodyrow"], table tbody tr').forEach(row => {
             if (row.dataset.sportCopyDone) return;
             const cells = row.querySelectorAll('td');
             if (cells.length < 7) return;
@@ -459,6 +526,7 @@
             const ggrCell   = cells[6];
 
             if (!sportCell || !ggrCell) return;
+            if (!formatGGR(ggrCell.textContent)) return;
             row.dataset.sportCopyDone = '1';
 
             sportCell.classList.add('xlink-ggr-copy');
@@ -477,23 +545,46 @@
             row.addEventListener('click', () => {
                 const full = getFullText();
                 if (!full) return;
-                navigator.clipboard.writeText(full).then(() => showToast('✓ ' + full));
+                copyRich(null, full);
             });
 
             sportCell.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const sport = sportCell.textContent.trim();
-                navigator.clipboard.writeText(sport).then(() => showToast(`✓ ${sport}`));
+                copyRich(null, sportCell.textContent.trim());
             });
 
             ggrCell.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const result = formatGGR(ggrCell.textContent);
                 if (!result) return;
-                navigator.clipboard.writeText(result).then(() => showToast('✓ ' + result));
+                copyRich(null, result);
             });
         });
     }
+
+    // Диагностика: выполнить в консоли на проблемной странице → __xlinkDebug()
+    window.__xlinkDebug = function () {
+        const blocks = findAggregateBlocks();
+        const info = {
+            url: window.location.href,
+            pathnameOk: window.location.pathname.includes('/ManagePlayersProfile'),
+            wrappersByClass: document.querySelectorAll('[class*="WrapperAggregate"]').length,
+            aggregateBlocksFound: blocks.length,
+            blocks: blocks.map(b => ({
+                title: b.title.textContent.trim(),
+                value: b.value.textContent.trim(),
+                armed: !!b.value.dataset.ggrDone,
+                period: getActivePeriodFor(b.value),
+            })),
+            periodButtons: document.querySelectorAll('[class*="PeriodsButton"]').length,
+            sportRows: document.querySelectorAll('tr[data-testid="mtablebodyrow"]').length,
+            playerIdsEl: !!document.querySelector('[class*="PlayerIds"]'),
+            iframes: document.querySelectorAll('iframe').length,
+        };
+        console.table(info.blocks);
+        console.log(info);
+        return info;
+    };
 
     function formatGGR(rawText) {
         const match = rawText.trim().match(/([+-]?\d[\d.,]*)/);
