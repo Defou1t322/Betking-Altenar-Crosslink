@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Betking ↔ Altenar Crosslink
 // @namespace    http://tampermonkey.net/
-// @version      2.16
+// @version      2.17
 // @description  Стрелка-переход между профилем игрока в Betking и Altenar, копирование GGR с цветом + збереження кольору при вставці в поле коментаря на Betking.
 // @author       Eduard Petrushenko
 // @updateURL    https://github.com/Defou1t322/Betking-Altenar-Crosslink/raw/refs/heads/main/CrosslinkBK.user.js
@@ -705,22 +705,50 @@
     }
 
     function highlightBonusBoundaries() {
-        const rows = document.querySelectorAll('tbody tr');
+        const rows = Array.from(document.querySelectorAll('tbody tr'));
         if (rows.length < 2) return;
 
+        const COUPON_COL = 2; // id купона — общий у ставки и её расчёта
+        const BONUS_COL  = 7; // название бонуса — заполнено не во всех строках
+
+        // 1) Карта "id купона → бонус".
+        //    Название бонуса есть в строке bet (и обычно в win), но у lose колонка
+        //    пустая, хотя строка относится к тому же бонусу.
+        const bonusByCoupon = new Map();
+        const parsed = rows.map(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length <= BONUS_COL) return null;
+
+            const coupon = cells[COUPON_COL].textContent.trim();
+            const bonus  = cells[BONUS_COL].textContent.trim();
+
+            if (coupon && bonus.includes('#')) bonusByCoupon.set(coupon, bonus);
+            return { row, coupon, bonus };
+        });
+
+        // 2) Граница ставится перед верхней строкой блока бонуса,
+        //    с учётом бонуса, унаследованного по id купона.
         let prevBonus = null;
 
-        rows.forEach(row => {
-            const cells = row.querySelectorAll('td');
-            if (cells.length < 8) return;
-            const bonusName = cells[7].textContent.trim();
-            if (!bonusName || !bonusName.includes('#')) return;
+        parsed.forEach(item => {
+            if (!item) return;
 
-            row.style.borderTop = '';
-            if (prevBonus !== null && bonusName !== prevBonus) {
-                row.style.borderTop = `3px solid ${BONUS_BOUNDARY_COLOR}`;
+            // Сбрасываем предыдущий стиль границы
+            item.row.style.borderTop = '';
+
+            const bonus = item.bonus.includes('#')
+                ? item.bonus
+                : (bonusByCoupon.get(item.coupon) || null);
+
+            // Строка без бонуса — не разрываем текущий блок
+            if (!bonus) return;
+
+            if (prevBonus !== null && bonus !== prevBonus) {
+                // Граница между разными бонусами
+                item.row.style.borderTop = `3px solid ${BONUS_BOUNDARY_COLOR}`;
             }
-            prevBonus = bonusName;
+
+            prevBonus = bonus;
         });
     }
 
