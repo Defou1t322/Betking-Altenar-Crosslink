@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Betking ↔ Altenar Crosslink
 // @namespace    http://tampermonkey.net/
-// @version      3.1.1
+// @version      3.1.2
 // @description  Єдиний скрипт антифроду ставок: перехід Betking ↔ Altenar, копіювання GGR, калькулятор бонусів, мінхантер і вимкнення бонусів (Betking), антифрод-підсвітка ставок (Altenar).
 // @author       Eduard Petrushenko (модулі антифроду — на основі скриптів Stanislav Drychyk)
 // @updateURL    https://gist.githubusercontent.com/Defou1t322/114b445e7027eba4a538c18d8889d347/raw/CrosslinkBK.user.js
@@ -267,6 +267,8 @@
         #xlink-banner-stack { position: fixed; top: 0; left: 0; width: 100%; z-index: 9999999; font-family: Arial, sans-serif; }
         .xlink-banner { display: flex; justify-content: space-between; align-items: center; gap: 15px; color: #fff; padding: 12px 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); box-sizing: border-box; font-size: 14px; line-height: 1.45; }
         .xlink-banner a.xlink-banner-btn { background: #fff; color: #333; padding: 5px 14px; border-radius: 5px; text-decoration: none; font-weight: bold; white-space: nowrap; margin-left: 10px; }
+        #login-button.xlink-login-pulse { animation: xlink-pulse 1.1s ease-in-out infinite; }
+        @keyframes xlink-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.9); } 50% { box-shadow: 0 0 0 10px rgba(255, 193, 7, 0); } }
         .xlink-banner-close { cursor: pointer; font-size: 20px; font-weight: bold; line-height: 1; opacity: 0.85; flex-shrink: 0; }
     `);
 
@@ -523,6 +525,13 @@
         // ── АВТОВХІД ──
         // Пароль скрипт не зберігає і не читає: кнопку «Log in» він натискає лише тоді,
         // коли поля вже заповнив менеджер паролів браузера.
+        //
+        // Chrome показує збережений пароль у полях одразу, але віддає його сторінці
+        // лише після першого кліку/клавіші користувача. До того поля для форми порожні,
+        // і клік скрипта по «Log in» дає «Заполните это поле». Тому:
+        //   — якщо значення справді доступні (форма валідна) — входимо самі;
+        //   — якщо Chrome їх тримає — підсвічуємо «Log in» і просимо один клік.
+        // ID після входу підставиться в будь-якому разі.
         function isAutofilled(el) {
             for (const sel of [':-webkit-autofill', ':autofill']) {
                 try { if (el.matches(sel)) return true; } catch (e) { /* селектор не підтримується */ }
@@ -530,8 +539,21 @@
             return false;
         }
 
-        function fieldReady(el) {
-            return !!el && (el.value !== '' || isAutofilled(el));
+        function loginFormReady() {
+            const user = document.getElementById('username_input');
+            const pass = document.getElementById('password_input');
+            const btn = document.getElementById('login-button');
+            if (!user || !pass || !btn || !user.value || !pass.value) return null;
+            const form = btn.closest('form');
+            return (!form || form.checkValidity()) ? btn : null;
+        }
+
+        function askOneClickLogin(pendingId, autofilled) {
+            const btn = document.getElementById('login-button');
+            if (btn) btn.classList.add('xlink-login-pulse');
+            showCopyToast(autofilled
+                ? `Altenar розлогінив. Натисніть «Log in» — ID ${pendingId} підставлю в пошук автоматично.`
+                : `Altenar розлогінив. Увійдіть — ID ${pendingId} підставлю в пошук автоматично.`, 15000);
         }
 
         async function handleAltenarLogin() {
@@ -547,15 +569,19 @@
                 return;
             }
 
-            const ready = await waitFor(() => {
-                const user = document.getElementById('username_input');
+            // Пароль видно в полі, але сторінці він ще не відданий — чекати далі марно.
+            const passLocked = () => {
                 const pass = document.getElementById('password_input');
-                const btn = document.getElementById('login-button');
-                return (fieldReady(user) && fieldReady(pass) && btn) ? btn : null;
-            }, AUTOFILL_WAIT, 200);
+                return !!pass && !pass.value && isAutofilled(pass);
+            };
+            const started = Date.now();
+            const ready = await waitFor(
+                () => loginFormReady() || (Date.now() - started > 1000 && passLocked() ? 'locked' : null),
+                AUTOFILL_WAIT, 200
+            );
 
-            if (!ready) {
-                showCopyToast(`Altenar розлогінив. Увійдіть — ID ${pendingId} підставлю в пошук автоматично. (Для автовходу збережіть пароль у браузері.)`, 8000);
+            if (!ready || ready === 'locked') {
+                askOneClickLogin(pendingId, ready === 'locked');
                 return;
             }
 
