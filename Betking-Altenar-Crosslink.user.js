@@ -1,12 +1,11 @@
 // ==UserScript==
 // @name         Betking ↔ Altenar Crosslink
 // @namespace    http://tampermonkey.net/
-// @version      3.1.0
+// @version      3.1.1
 // @description  Єдиний скрипт антифроду ставок: перехід Betking ↔ Altenar, копіювання GGR, калькулятор бонусів, мінхантер і вимкнення бонусів (Betking), антифрод-підсвітка ставок (Altenar).
 // @author       Eduard Petrushenko (модулі антифроду — на основі скриптів Stanislav Drychyk)
-// @homepageURL  https://github.com/Defou1t322/Betking-Altenar-Crosslink
-// @updateURL    https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking-Altenar-Crosslink.user.js
-// @downloadURL  https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking-Altenar-Crosslink.user.js
+// @updateURL    https://gist.githubusercontent.com/Defou1t322/114b445e7027eba4a538c18d8889d347/raw/CrosslinkBK.user.js
+// @downloadURL  https://gist.githubusercontent.com/Defou1t322/114b445e7027eba4a538c18d8889d347/raw/CrosslinkBK.user.js
 // @match        https://sb2admin-altenar2.biahosted.com/*
 // @match        http://sb2admin-altenar2.biahosted.com/Account/Login*
 // @match        https://admin.betking.com.ua/*
@@ -31,7 +30,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        unsafeWindow
-// @connect      raw.githubusercontent.com
+// @connect      gist.githubusercontent.com
 // @connect      docs.google.com
 // @connect      googleusercontent.com
 // @connect      google.com
@@ -41,7 +40,7 @@
 /*
  * Структура файлу
  *   0. Спільні хелпери (копіювання в буфер, очікування, тости)
- *   1. Автооновлення (банер, джерело — GitHub-репозиторій)
+ *   1. Автооновлення (банер, джерело — секретний gist)
  *   2. Детектор старих скриптів Станіслава (щоб модулі не працювали двічі)
  *   3. CROSSLINK — усі хости: стрілки Betking ↔ Altenar, автопошук, GGR, вставка кольору
  *   4. BETKING FRAUD (тільки admin.betking.com.ua): мінхантер, вимкнення бонусів,
@@ -71,8 +70,7 @@
         );
     }
 
-    const REPO_URL = 'https://github.com/Defou1t322/Betking-Altenar-Crosslink';
-    const RAW_SCRIPT_URL = 'https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking-Altenar-Crosslink.user.js';
+    const RAW_SCRIPT_URL = 'https://gist.githubusercontent.com/Defou1t322/114b445e7027eba4a538c18d8889d347/raw/CrosslinkBK.user.js';
 
     // ═════════════════════════════════════════════════════════════
     // 0. СПІЛЬНІ ХЕЛПЕРИ
