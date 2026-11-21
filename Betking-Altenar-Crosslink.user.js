@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Betking ↔ Altenar Crosslink
 // @namespace    http://tampermonkey.net/
-// @version      3.0.0
+// @version      3.1.0
 // @description  Єдиний скрипт антифроду ставок: перехід Betking ↔ Altenar, копіювання GGR, калькулятор бонусів, мінхантер і вимкнення бонусів (Betking), антифрод-підсвітка ставок (Altenar).
 // @author       Eduard Petrushenko (модулі антифроду — на основі скриптів Stanislav Drychyk)
 // @homepageURL  https://github.com/Defou1t322/Betking-Altenar-Crosslink
 // @updateURL    https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking-Altenar-Crosslink.user.js
 // @downloadURL  https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking-Altenar-Crosslink.user.js
 // @match        https://sb2admin-altenar2.biahosted.com/*
+// @match        http://sb2admin-altenar2.biahosted.com/Account/Login*
 // @match        https://admin.betking.com.ua/*
 // @match        https://admin.777.ua/*
 // @match        https://admin.vegas.ua/*
@@ -61,6 +62,14 @@
     const IS_ALTENAR = HOST.includes('altenar');
     const IS_BETKING_ADMIN = HOST === 'admin.betking.com.ua';
     const PAGE_WIN = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+
+    // Сторінка входу Altenar (ASP.NET, /Account/Login?ReturnUrl=…).
+    function isAltenarLoginPage() {
+        return IS_ALTENAR && (
+            window.location.pathname.toLowerCase().startsWith('/account/login') ||
+            !!document.querySelector('form[action*="/Account/Login" i] #password_input')
+        );
+    }
 
     const REPO_URL = 'https://github.com/Defou1t322/Betking-Altenar-Crosslink';
     const RAW_SCRIPT_URL = 'https://raw.githubusercontent.com/Defou1t322/Betking-Altenar-Crosslink/main/Betking-Altenar-Crosslink.user.js';
@@ -136,7 +145,7 @@
     }
 
     // Маленький тост справа знизу — підтвердження копіювання.
-    function showCopyToast(msg) {
+    function showCopyToast(msg, durationMs = 2000) {
         const old = document.getElementById('xlink-ggr-toast');
         if (old) old.remove();
         const el = document.createElement('div');
@@ -144,7 +153,7 @@
         el.className = 'xlink-ggr-toast';
         el.textContent = msg;
         document.body.appendChild(el);
-        setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 2000);
+        setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, durationMs);
     }
 
     // Єдина точка копирования. В буфер ВСЕГДА кладём два формата:
@@ -477,7 +486,90 @@
             return document.querySelector('[class*="FindButton"]') || (svg ? svg.closest('button') : null);
         }
 
+        // ── ID, що чекає на пошук (переживає викидання на логін) ──
+        // Altenar іноді розлогінює саме під час переходу: сервер робить 302 на
+        // /Account/Login, а після POST форми входу хеш #extId=… губиться — і пошук
+        // відкривається порожнім. Тому ID кладемо в sessionStorage ЦІЄЇ вкладки і
+        // прибираємо лише після кліку по профілю.
+        const PENDING_KEY = 'xlink_pending_extid';
+        const PENDING_TTL = 5 * 60 * 1000;
+        const LOGIN_TRIES_KEY = 'xlink_autologin_tries';
+        const LOGIN_MAX_TRIES = 2;            // запобіжник від циклу «вхід → вилетів → вхід»
+        const LOGIN_TRIES_WINDOW = 3 * 60 * 1000;
+        const AUTOFILL_WAIT = 6000;           // скільки чекаємо, поки браузер підставить логін/пароль
+        const LOGIN_SEEN_KEY = 'xlink_login_seen';
+
+        function ssGet(key) {
+            try { return JSON.parse(sessionStorage.getItem(key) || 'null'); } catch (e) { return null; }
+        }
+        function ssSet(key, value) {
+            try { sessionStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignore */ }
+        }
+        function ssDel(key) {
+            try { sessionStorage.removeItem(key); } catch (e) { /* ignore */ }
+        }
+
+        function savePendingId(id) { ssSet(PENDING_KEY, { id: String(id), ts: Date.now() }); }
+        function clearPendingId() { ssDel(PENDING_KEY); }
+        function readPendingId() {
+            const p = ssGet(PENDING_KEY);
+            if (!p || !p.id || Date.now() - p.ts > PENDING_TTL) { clearPendingId(); return null; }
+            return p.id;
+        }
+
+        function hashExtId() {
+            const m = window.location.hash.match(/#extId=(\d+)/);
+            return m ? m[1] : null;
+        }
+
+        // ── АВТОВХІД ──
+        // Пароль скрипт не зберігає і не читає: кнопку «Log in» він натискає лише тоді,
+        // коли поля вже заповнив менеджер паролів браузера.
+        function isAutofilled(el) {
+            for (const sel of [':-webkit-autofill', ':autofill']) {
+                try { if (el.matches(sel)) return true; } catch (e) { /* селектор не підтримується */ }
+            }
+            return false;
+        }
+
+        function fieldReady(el) {
+            return !!el && (el.value !== '' || isAutofilled(el));
+        }
+
+        async function handleAltenarLogin() {
+            const pendingId = readPendingId();
+            // Автовхід — тільки як проміжний крок переходу з Betking. Якщо менеджер
+            // вийшов сам, не заходимо за нього назад.
+            if (!pendingId) return;
+
+            const tries = ssGet(LOGIN_TRIES_KEY);
+            const recent = tries && Date.now() - tries.ts < LOGIN_TRIES_WINDOW ? tries.n : 0;
+            if (recent >= LOGIN_MAX_TRIES) {
+                showCopyToast(`Автовхід не вдався — увійдіть вручну. ID ${pendingId} підставлю в пошук після входу.`, 8000);
+                return;
+            }
+
+            const ready = await waitFor(() => {
+                const user = document.getElementById('username_input');
+                const pass = document.getElementById('password_input');
+                const btn = document.getElementById('login-button');
+                return (fieldReady(user) && fieldReady(pass) && btn) ? btn : null;
+            }, AUTOFILL_WAIT, 200);
+
+            if (!ready) {
+                showCopyToast(`Altenar розлогінив. Увійдіть — ID ${pendingId} підставлю в пошук автоматично. (Для автовходу збережіть пароль у браузері.)`, 8000);
+                return;
+            }
+
+            ssSet(LOGIN_TRIES_KEY, { n: recent + 1, ts: Date.now() });
+            showCopyToast(`Altenar розлогінив — входжу знову, далі пошук ID ${pendingId}…`, 4000);
+            // Саме click(), а не form.submit(): так спрацює onsubmit сторінки (fillDeviceSecret).
+            setTimeout(() => ready.click(), 400);
+        }
+
         function clickProfileAndClose(link) {
+            clearPendingId();
+            ssDel(LOGIN_TRIES_KEY);
             link.click();
             if (CONFIG.closeTabAfterProfile) setTimeout(() => window.close(), 300);
         }
@@ -497,23 +589,45 @@
                         const afterLinks = getProfileLinks();
                         if (afterLinks.length >= 1) clickProfileAndClose(afterLinks[0]);
                         else if (waited < 5000) setTimeout(() => clickAfterFind(waited + 200), 200);
+                        else clearPendingId();
                     };
                     setTimeout(() => clickAfterFind(), 150);
                     return;
                 }
 
+                // Гравця не знайдено — більше не тягнемо цей ID за вкладкою.
                 if (attempts < 25) setTimeout(() => check(attempts + 1), 300);
+                else clearPendingId();
             };
             check();
         }
 
         function autoFillAltenarSearch() {
-            if (!window.location.pathname.includes('/v2/players')) return;
-            const match = window.location.hash.match(/#extId=(\d+)/);
-            if (!match) return;
+            const fromHash = hashExtId();
+            if (fromHash) savePendingId(fromHash);
+            const targetId = fromHash || readPendingId();
+            if (!targetId) return;
 
-            const targetId = match[1];
-            history.replaceState(null, '', window.location.pathname + window.location.search);
+            if (isAltenarLoginPage()) {
+                ssSet(LOGIN_SEEN_KEY, Date.now());
+                handleAltenarLogin();
+                return;
+            }
+
+            if (!window.location.pathname.includes('/v2/players')) {
+                // Після входу Altenar може повернути не на пошук гравців (ReturnUrl=/ тощо).
+                // Перекидаємо лише одразу після сторінки входу — щоб вкладка не «тягнула»
+                // менеджера на пошук, коли він сам пішов деінде.
+                const seen = ssGet(LOGIN_SEEN_KEY);
+                ssDel(LOGIN_SEEN_KEY);
+                if (seen && Date.now() - seen < LOGIN_TRIES_WINDOW) {
+                    window.location.assign(`/v2/players?site=1#extId=${targetId}`);
+                }
+                return;
+            }
+            ssDel(LOGIN_SEEN_KEY);
+
+            if (fromHash) history.replaceState(null, '', window.location.pathname + window.location.search);
 
             const tryFill = (attempts = 0) => {
                 let extIdInput = null;
@@ -540,8 +654,11 @@
                         findBtn.click();
                         setTimeout(() => autoClickProfile(), 200);
                     }, 100);
-                } else if (attempts < 20) {
+                } else if (attempts < 40) {
+                    // Після свіжого входу Altenar вантажиться довше — чекаємо до ~20 с.
                     setTimeout(() => tryFill(attempts + 1), 500);
+                } else {
+                    clearPendingId();
                 }
             };
             tryFill();
@@ -841,6 +958,7 @@
 
             if (IS_ALTENAR) {
                 autoFillAltenarSearch();
+                if (isAltenarLoginPage()) return; // на сторінці входу більше нічого не робимо
                 const run = () => {
                     attachArrowsAltenar();
                     attachArrowAltenarProfile();
@@ -2689,11 +2807,11 @@
         try { Crosslink.init(); } catch (e) { console.error('[xlink] Crosslink впав:', e); }
 
         if (IS_BETKING_ADMIN) startModule('betking', BetkingFraud);
-        if (IS_ALTENAR) startModule('altenar', AltenarFraud);
+        if (IS_ALTENAR && !isAltenarLoginPage()) startModule('altenar', AltenarFraud);
 
         // Банер оновлення — лише там, де працює антифрод-команда, і не в службовій
         // вкладці автопошуку Altenar (вона закривається сама).
-        if ((IS_BETKING_ADMIN || IS_ALTENAR) && !window.location.hash.includes('extId=')) {
+        if ((IS_BETKING_ADMIN || IS_ALTENAR) && !window.location.hash.includes('extId=') && !isAltenarLoginPage()) {
             try { checkForUpdates(); } catch (e) { console.error('[xlink] update check впав:', e); }
         }
     }
