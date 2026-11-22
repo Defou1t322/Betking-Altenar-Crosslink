@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Betking ↔ Altenar Crosslink
 // @namespace    http://tampermonkey.net/
-// @version      3.1.2
+// @version      3.1.3
 // @description  Єдиний скрипт антифроду ставок: перехід Betking ↔ Altenar, копіювання GGR, калькулятор бонусів, мінхантер і вимкнення бонусів (Betking), антифрод-підсвітка ставок (Altenar).
 // @author       Eduard Petrushenko (модулі антифроду — на основі скриптів Stanislav Drychyk)
 // @updateURL    https://gist.githubusercontent.com/Defou1t322/114b445e7027eba4a538c18d8889d347/raw/CrosslinkBK.user.js
@@ -1197,6 +1197,24 @@
         // 4.1 АВТО-ВИМКНЕННЯ БОНУСІВ (МАКРОС)
         // ─────────────────────────────────────────
         const BONUS_CHECKBOX = 'input#Players_no_bonus';
+
+        // Блок «Блокировки». Спершу нові класи (адмінка оновлена 2026-11), далі старі id — про запас.
+        const RF = {
+            show: 'input.js-restricted-features-show, .js-restricted-features-show, input.show-player-restricted-features-button',
+            block: '.js-restricted-features',
+            checkbox: 'input.js-restricted-features-checkbox:not(:disabled)',
+            selectAll: '.js-restricted-features-toggle-all, button#select-all-restricted-features-button',
+            save: '.js-restricted-features-save, button#change-restricted-features-button',
+        };
+
+        function rfCheckboxes() {
+            return Array.from(document.querySelectorAll(RF.checkbox));
+        }
+
+        function rfAllChecked() {
+            const list = rfCheckboxes();
+            return list.length > 0 && list.every(cb => cb.checked);
+        }
         const CHECKBOX_ATTEMPTS = 3;
         const MACRO_WARN_KEY = 'bkf_macro_warnings';
         const MACRO_TOAST = { id: 'bkf-toast-macro', bottom: '140px' };
@@ -1390,19 +1408,40 @@
 
                 await dismissLeftoverSwal();
 
-                const showBtn = document.querySelector('input.show-player-restricted-features-button');
-                if (!showBtn) throw new Error('Крок 4 (Блокировки): кнопку "Показать" не знайдено');
-                showBtn.click();
+                // Крок 4. «Показать». У новій адмінці це slideToggle — повторний клік
+                // ХОВАЄ блок, тож тиснемо лише коли блок справді схований.
+                const block = document.querySelector(RF.block);
+                if (!block || !isVisible(block)) {
+                    const showBtn = document.querySelector(RF.show);
+                    if (!showBtn) throw new Error('Крок 4 (Блокировки): кнопку "Показать" не знайдено');
+                    showBtn.click();
+                }
 
-                const selectAllBtn = await waitFor(() => {
-                    const el = document.querySelector('button#select-all-restricted-features-button');
-                    return isVisible(el) ? el : null;
+                const boxes = await waitFor(() => {
+                    const list = rfCheckboxes();
+                    return list.length && list.some(isVisible) ? list : null;
                 });
-                if (!selectAllBtn) throw new Error('Крок 5 (Блокировки): кнопка "Выбрать все" не з\'явилася');
-                selectAllBtn.click();
-                await sleep(300);
+                if (!boxes) throw new Error('Крок 4 (Блокировки): галочки блокувань не з\'явилися');
 
-                const saveBtn = document.querySelector('button#change-restricted-features-button');
+                // Крок 5. «Выбрать все». Тепер це перемикач «Выбрать все / Снять все»:
+                // якщо все вже відмічено, клік ЗНІМЕ всі галочки. Тому тиснемо лише коли
+                // є невідмічені, а результат перевіряємо і за потреби добиваємо вручну.
+                if (!rfAllChecked()) {
+                    const toggleBtn = document.querySelector(RF.selectAll);
+                    if (toggleBtn) toggleBtn.click();
+                    await waitFor(rfAllChecked, 1500, 100);
+                }
+                if (!rfAllChecked()) {
+                    rfCheckboxes().forEach(cb => {
+                        if (cb.checked) return;
+                        cb.checked = true;
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                }
+                if (!rfAllChecked()) throw new Error('Крок 5 (Блокировки): не вдалося відмітити всі галочки');
+
+                // Крок 6. «Сохранить» — AJAX; при успіху адмінка перезавантажує сторінку.
+                const saveBtn = document.querySelector(RF.save);
                 if (!saveBtn) throw new Error('Крок 6 (Блокировки): кнопку "Сохранить" не знайдено');
 
                 if (warnings.length) {
@@ -1412,6 +1451,18 @@
                 pageWillReload = true;
                 btn.innerHTML = '<span>💾</span> Зберігаю...';
                 saveBtn.click();
+
+                // Якщо сервер відмовив, сторінка НЕ перезавантажиться, а адмінка
+                // покаже Swal з помилкою — інакше кнопка вічно висіла б у «Зберігаю...».
+                const failText = await waitFor(() => {
+                    const p = getSwalPopup();
+                    return p && p.querySelector('.swal2-icon-error, .swal2-error') ? (swalText(p) || 'помилка') : null;
+                }, 10000, 200);
+                if (failText) {
+                    pageWillReload = false;
+                    try { sessionStorage.removeItem(MACRO_WARN_KEY); } catch (e) { /* ignore */ }
+                    throw new Error(`Крок 6 (Блокировки): адмінка відповіла помилкою — ${failText}`);
+                }
 
             } catch (err) {
                 console.error('[bkf] Macro Error: ', err);
